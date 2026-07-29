@@ -1,0 +1,10 @@
+{
+  "143": {
+    "Executor": "0xb34C788AC3b5D4e3159Ad0084d53786BbD7870b5",
+    "FlashLoanHandler": "0x4f3e0A2bfc7a0E7bD3c33184Ac3291B817127d28",
+    "HandlerAaveV3": "0x1d92711d6f5a2E7a33835bFFbD419E06CD2a6EB0",
+    "HandlerFunds": "0x7049b60c9103ED789B60fb601bCf67852c21d209",
+    "HandlerSwap": "0x31A5c81a207e9012c6bBdE5d74528B6fF6c4AA76",
+    "Registry": "0x5bb4FffD2DfD3a7B6323FB193542bcCbEC7BA846"
+  }
+}

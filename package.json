@@ -1,0 +1,22 @@
+{
+  "name": "knot",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "build": "pnpm --dir web build",
+    "check": "pnpm check:contracts && pnpm check:web",
+    "check:contracts": "forge fmt --root contracts --check && forge build --root contracts",
+    "check:web": "pnpm --dir web test && pnpm --dir web typecheck && pnpm --dir web build",
+    "contracts:build": "forge build --root contracts",
+    "contracts:deps": "bash scripts/install-contract-deps.sh",
+    "contracts:fmt": "forge fmt --root contracts",
+    "dev": "pnpm --dir web dev",
+    "setup": "pnpm install --frozen-lockfile && pnpm contracts:deps && pnpm contracts:build",
+    "test": "pnpm --dir web test"
+  },
+  "packageManager": "pnpm@10.34.0",
+  "engines": {
+    "node": ">=22.13.0",
+    "pnpm": ">=10.34.0 <12"
+  }
+}

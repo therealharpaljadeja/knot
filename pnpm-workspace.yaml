@@ -1,0 +1,10 @@
+packages:
+  - web
+onlyBuiltDependencies:
+  - "@reown/appkit"
+  - protobufjs
+  - sharp
+allowBuilds:
+  '@reown/appkit': true
+  protobufjs: true
+  sharp: true

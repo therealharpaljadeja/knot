@@ -1,0 +1,78 @@
+name: Bug report
+description: Report a reproducible problem that is not a security vulnerability
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Do not disclose vulnerabilities or secrets here; use the Security tab instead.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues for this problem.
+          required: true
+        - label: This report does not contain a private key, seed phrase, token, or other secret.
+          required: true
+        - label: This is not a security vulnerability.
+          required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Web app
+        - Contract compilation
+        - Contract behavior
+        - Encoding or simulation
+        - Documentation
+        - Contributor tooling
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe the behavior and its impact.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Provide the smallest repeatable sequence. Redact wallet-sensitive information.
+      placeholder: |
+        1. Run …
+        2. Select …
+        3. Observe …
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include OS, browser or wallet, Node, pnpm, Foundry, and relevant commit.
+      placeholder: |
+        OS:
+        Browser/wallet:
+        Node:
+        pnpm:
+        Foundry:
+        Commit:
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized logs or screenshots
+      description: Remove secrets, wallet connection IDs, private RPC URLs, and personal information.

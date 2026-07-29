@@ -1,0 +1,6 @@
+{
+  "source": "contracts/script/PrintCalldata.s.sol",
+  "calldataKeccak256": "0x7549e23fc8f213db13dad85a81a7a4a0887b61e9726006a2c4715b754684ce52",
+  "flashAmount": "1000000",
+  "premium": "500"
+}
