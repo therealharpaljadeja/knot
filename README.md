@@ -1,17 +1,18 @@
 # Knot
 
-Knot is a deliberately small, auditable combo executor for Monad mainnet. It
+> [!WARNING]
+> Knot executes transactions with real assets on Monad mainnet and has not
+> undergone an independent security audit. Review every transaction, use only
+> amounts you are comfortable with, and start small. The software is provided
+> as-is under the [MIT License](LICENSE).
+
+Knot is a deliberately small combo executor for Monad mainnet. It
 opens an Aave v3 simple flash loan, runs up to two user-selected DeFi actions,
 repays, and returns every touched asset to the initiating wallet in one atomic
 transaction.
 
 The v1 UI is USDC-only. The contracts are asset-generic and intentionally easy
 to extend with new handler contracts.
-
-> **Mainnet notice.** Knot executes transactions with real assets on Monad
-> mainnet and has not undergone an independent security audit. Review every
-> transaction, use only amounts you are comfortable with, and start small.
-> The software is provided as-is under the [MIT License](LICENSE).
 
 [Contributing](CONTRIBUTING.md) · [Support](SUPPORT.md) · [Security](SECURITY.md) ·
 [Code of Conduct](CODE_OF_CONDUCT.md) · [MIT License](LICENSE)
