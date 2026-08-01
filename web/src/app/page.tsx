@@ -116,6 +116,7 @@ export default function BuilderPage() {
   const [phase, setPhase] = useState<"idle" | "approving" | "sending">("idle");
   const [swapQuotes, setSwapQuotes] = useState<Record<string, SwapQuoteState>>({});
   const hasSwap = actions.some((action) => action.cubeId === "swap");
+  const hasRepay = actions.some((action) => action.cubeId === "aave-repay");
 
   useEffect(() => {
     setMainnetNoticeAccepted(false);
@@ -310,6 +311,9 @@ export default function BuilderPage() {
   }, [actions, swapQuotes]);
 
   const automaticFunding = useMemo(() => {
+    // Repay sends principal to Aave instead of returning it to the executor, so the wallet
+    // funds the full repayment. Anything Aave does not pull is swept back in the same call.
+    if (hasRepay) return borrowAmount + premium;
     if (!hasSwap) return premium;
 
     const last = actions.at(-1);
@@ -328,7 +332,7 @@ export default function BuilderPage() {
     }
 
     return borrowAmount + premium;
-  }, [actions, borrowAmount, hasSwap, premium, swapQuotes]);
+  }, [actions, borrowAmount, hasRepay, hasSwap, premium, swapQuotes]);
 
   const combo = useMemo(() => {
     if (!encodedActions || borrowAmount <= 0n || !deployed) return null;

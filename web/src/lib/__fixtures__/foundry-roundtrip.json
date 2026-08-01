@@ -2,5 +2,11 @@
   "source": "contracts/script/PrintCalldata.s.sol",
   "calldataKeccak256": "0x7549e23fc8f213db13dad85a81a7a4a0887b61e9726006a2c4715b754684ce52",
   "flashAmount": "1000000",
-  "premium": "500"
+  "premium": "500",
+  "repay": {
+    "calldataKeccak256": "0x5c1636d3574e15c5dc7bccf953f67d1bed82e76966551ae694b6b55464dda93a",
+    "flashAmount": "1000000",
+    "collateralFunding": "1200000",
+    "premium": "500"
+  }
 }

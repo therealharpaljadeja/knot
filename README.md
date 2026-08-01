@@ -80,7 +80,7 @@ Executor ──delegatecall──► FlashLoanHandler ──call──► Aave v
   └───────────────────────────────────────────────────┘
                  │ delegatecall, whitelist checked
                  ├── HandlerSwap      → allowlisted router
-                 ├── HandlerAaveV3    → Aave supply / withdraw
+                 ├── HandlerAaveV3    → Aave supply / withdraw / repay
                  └── HandlerFunds     → exact wallet funding / return
 
 Final post-process:

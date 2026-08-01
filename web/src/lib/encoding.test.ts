@@ -8,6 +8,7 @@ import {
 } from "viem";
 import { abis } from "@/generated/contracts";
 import { ADDRESSES } from "@/config/chain";
+import { aaveRepayCube } from "@/cubes/aave-repay";
 import fixture from "./__fixtures__/foundry-roundtrip.json";
 import { encodeCombo } from "./encoding";
 import type { DeploymentAddresses } from "./types";
@@ -40,6 +41,59 @@ describe("combo encoding", () => {
     });
 
     expect(keccak256(combo.data)).toBe(fixture.calldataKeccak256);
+  });
+
+  it("matches the Foundry fixture for a repay deleverage combo", () => {
+    // Same four inner actions as PrintCalldata's repay case: clear the debt with the flash
+    // principal, pull the freed collateral in as aUSDC, withdraw it as USDC, then fund the
+    // premium. encodeCombo appends that last funding call itself.
+    const actions = [
+      {
+        handler: addresses.HandlerAaveV3,
+        data: encodeFunctionData({
+          abi: abis.HandlerAaveV3,
+          functionName: "repay",
+          args: [ADDRESSES.usdc, maxUint256],
+        }),
+      },
+      {
+        handler: addresses.HandlerFunds,
+        data: encodeFunctionData({
+          abi: abis.HandlerFunds,
+          functionName: "addFunds",
+          args: [ADDRESSES.aUsdc, BigInt(fixture.repay.collateralFunding)],
+        }),
+      },
+      {
+        handler: addresses.HandlerAaveV3,
+        data: encodeFunctionData({
+          abi: abis.HandlerAaveV3,
+          functionName: "withdraw",
+          args: [ADDRESSES.usdc, maxUint256],
+        }),
+      },
+    ];
+
+    const combo = encodeCombo({
+      amount: BigInt(fixture.repay.flashAmount),
+      fundingAmount: BigInt(fixture.repay.premium),
+      actions,
+      deployments: addresses,
+    });
+
+    expect(keccak256(combo.data)).toBe(fixture.repay.calldataKeccak256);
+  });
+
+  it("encodes the repay cube against the Aave handler", () => {
+    const action = aaveRepayCube.encode(
+      { asset: ADDRESSES.usdc, amount: "1.5", chained: "false" },
+      addresses,
+    );
+    const decoded = decodeFunctionData({ abi: abis.HandlerAaveV3, data: action.data });
+
+    expect(action.handler).toBe(addresses.HandlerAaveV3);
+    expect(decoded.functionName).toBe("repay");
+    expect(decoded.args).toEqual([ADDRESSES.usdc, 1_500_000n]);
   });
 
   it("encodes a zero-premium smoke test as one outer flash-loan handler", () => {

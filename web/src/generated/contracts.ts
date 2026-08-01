@@ -805,6 +805,30 @@ export const abis = {
     },
     {
       "type": "function",
+      "name": "repay",
+      "inputs": [
+        {
+          "name": "asset",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "amount",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "repaid",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
       "name": "supply",
       "inputs": [
         {

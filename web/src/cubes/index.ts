@@ -1,3 +1,4 @@
+import { aaveRepayCube } from "./aave-repay";
 import { aaveSupplyCube } from "./aave-supply";
 import { aaveWithdrawCube } from "./aave-withdraw";
 import { addFundsCube } from "./add-funds";
@@ -8,6 +9,7 @@ export const cubeManifests = [
   swapCube,
   aaveSupplyCube,
   aaveWithdrawCube,
+  aaveRepayCube,
   addFundsCube,
   returnFundsCube,
 ] as const;

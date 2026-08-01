@@ -12,6 +12,7 @@ export POOL=0x69a5F9AD4f96ebf0a0C792dD42a01cC5C0102fef
 export DATA_PROVIDER=0xB65A68B98274ef7D9a60E0C0747dD1BEc3D32fad
 export USDC=0x754704Bc059F8C67012fEd69BC8A327a5aafb603
 export AUSDC=0x35a73BAcb179d3740395A3ceCc87FF2e581d6042
+export VDUSDC=0x9F555aB84C4e0a531B50283f09Dba7A97134c4e4
 export WETH=0xEE8c0E9f1BFFb4Eb878d8f15f368A02a35481242
 export MAX_UINT=115792089237316195423570985008687907853269984665640564039457584007913129639935
 ```
@@ -78,7 +79,7 @@ forge build
 Expected: successful compilation with no Solidity warnings. Do not proceed if
 the address-book dependency resolves to different Monad addresses.
 
-Deploy. Leave router variables unset until step 5 if the venues are not yet
+Deploy. Leave router variables unset until step 6 if the venues are not yet
 reviewed:
 
 ```bash
@@ -267,7 +268,111 @@ On Monadscan confirm, in order: flash transfer, Aave `Supply`, aUSDC mint, Aave
 `Withdraw`, aUSDC burn, premium funding, and repayment. No aUSDC transfer should
 remain at the Executor.
 
-## 5. Two-hop swap — Uniswap V3 testing mode
+## 5. Deleverage drill — repay debt from collateral
+
+The repay action pays variable-rate debt for the initiating wallet, so this
+drill needs a live position. Create a small one outside Knot with the same
+wallet: supply USDC collateral, then borrow USDC against it (rate mode 2 is
+variable, the only mode the Pool accepts):
+
+```bash
+export SUPPLY_AMOUNT=2000000
+export DEBT=700000
+cast send "$USDC" "approve(address,uint256)" "$POOL" "$SUPPLY_AMOUNT" \
+  --rpc-url "$RPC_URL" --account "$DEPLOYER_ACCOUNT"
+cast send "$POOL" "supply(address,uint256,address,uint16)" \
+  "$USDC" "$SUPPLY_AMOUNT" "$WALLET" 0 \
+  --rpc-url "$RPC_URL" --account "$DEPLOYER_ACCOUNT"
+cast send "$POOL" "borrow(address,uint256,uint256,uint16,address)" \
+  "$USDC" "$DEBT" 2 0 "$WALLET" \
+  --rpc-url "$RPC_URL" --account "$DEPLOYER_ACCOUNT"
+```
+
+Confirm the variable debt exists; the drill assumes it stays above `$BORROW`:
+
+```bash
+cast call "$VDUSDC" "balanceOf(address)(uint256)" "$WALLET" --rpc-url "$RPC_URL"
+```
+
+Refresh the premium exactly as in step 3, then approve the premium in USDC and
+the collateral in aUSDC. Fund slightly more collateral than the flash amount so
+aToken interest rounding can never leave the repayment short:
+
+```bash
+export BORROW=500000
+export PREMIUM_BPS=$(cast call "$POOL" \
+  "FLASHLOAN_PREMIUM_TOTAL()(uint128)" --rpc-url "$RPC_URL")
+export PREMIUM=$(( (BORROW * PREMIUM_BPS + 5000) / 10000 ))
+export COLLATERAL_IN=600000
+cast send "$USDC" "approve(address,uint256)" "$EXECUTOR" "$PREMIUM" \
+  --rpc-url "$RPC_URL" --account "$DEPLOYER_ACCOUNT"
+cast send "$AUSDC" "approve(address,uint256)" "$EXECUTOR" "$COLLATERAL_IN" \
+  --rpc-url "$RPC_URL" --account "$DEPLOYER_ACCOUNT"
+```
+
+Order matters: repay runs first so the debt is cleared before the wallet's
+aUSDC moves, because Aave checks the sender's health factor on every aToken
+transfer.
+
+```bash
+export REPAY_DATA=$(cast calldata \
+  "repay(address,uint256)" "$USDC" "$MAX_UINT")
+export COLLATERAL_DATA=$(cast calldata \
+  "addFunds(address,uint256)" "$AUSDC" "$COLLATERAL_IN")
+export WITHDRAW_DATA=$(cast calldata \
+  "withdraw(address,uint256)" "$USDC" "$MAX_UINT")
+export FUND_DATA=$(cast calldata \
+  "addFunds(address,uint256)" "$USDC" "$PREMIUM")
+export FLASH_DATA=$(cast calldata \
+  "flashLoan(address,uint256,address[],bytes[])" \
+  "$USDC" "$BORROW" "[$AAVE,$FUNDS,$AAVE,$FUNDS]" \
+  "[$REPAY_DATA,$COLLATERAL_DATA,$WITHDRAW_DATA,$FUND_DATA]")
+```
+
+Simulate, then send the exact same call:
+
+```bash
+cast call "$EXECUTOR" \
+  "execute(address[],bytes[])" "[$FLASH]" "[$FLASH_DATA]" \
+  --from "$WALLET" --rpc-url "$RPC_URL"
+cast send "$EXECUTOR" \
+  "execute(address[],bytes[])" "[$FLASH]" "[$FLASH_DATA]" \
+  --rpc-url "$RPC_URL" --account "$DEPLOYER_ACCOUNT"
+```
+
+Expected balance outcome:
+
+- wallet variable debt decreases by `$BORROW`, minus block-level interest
+  accrual;
+- wallet aUSDC decreases by exactly `$COLLATERAL_IN`;
+- wallet USDC changes by about `COLLATERAL_IN - BORROW - PREMIUM`, moving a few
+  units with aToken interest rounding;
+- Executor USDC, aUSDC and MON balances are zero; both allowances are zero.
+
+```bash
+cast call "$VDUSDC" "balanceOf(address)(uint256)" "$WALLET" --rpc-url "$RPC_URL"
+cast call "$USDC" "balanceOf(address)(uint256)" "$EXECUTOR" --rpc-url "$RPC_URL"
+cast call "$AUSDC" "balanceOf(address)(uint256)" "$EXECUTOR" --rpc-url "$RPC_URL"
+cast balance "$EXECUTOR" --rpc-url "$RPC_URL"
+cast call "$USDC" "allowance(address,address)(uint256)" \
+  "$WALLET" "$EXECUTOR" --rpc-url "$RPC_URL"
+cast call "$AUSDC" "allowance(address,address)(uint256)" \
+  "$WALLET" "$EXECUTOR" --rpc-url "$RPC_URL"
+```
+
+On Monadscan confirm, in order: flash transfer, Aave `Repay` with the wallet as
+`user` and the Executor as `repayer`, aUSDC transfer wallet → Executor, Aave
+`Withdraw`, premium funding, repayment and the final USDC sweep. If the
+remaining debt was below `$BORROW`, Aave caps the repayment and the surplus
+principal returns to the wallet in the sweep; that is expected, not a failure.
+
+The repay cube is also available in the UI. It always funds the full repayment
+(`BORROW + PREMIUM`) from the wallet, because the v1 USDC-only interface cannot
+move aUSDC collateral; whatever Aave does not pull is swept back in the same
+transaction. The complete deleverage above stays a cast-level drill until the
+UI can fund aTokens.
+
+## 6. Two-hop swap — Uniswap V3 testing mode
 
 The frontend fixes swaps to Uniswap V3 `SwapRouter02` and obtains quotes from
 Uniswap `QuoterV2`. Allowlist the reviewed official router once as Registry
@@ -305,7 +410,7 @@ repayment, and final token sweeps. Wallet net USDC is
 If the call fails `InsufficientOutput`, obtain a fresh quote; do not blindly
 widen slippage.
 
-## 6. Pause / unpause drill
+## 7. Pause / unpause drill
 
 Pause as owner:
 
@@ -355,7 +460,9 @@ pnpm --dir web test
 pnpm --dir web dev
 ```
 
-Open the app, connect on chain 143, and repeat steps 3–6 with the matching
-presets. Before every send, verify that the UI says “Simulation passed”, the
-approval amount equals the exact funding requirement, and the Monadscan link
-points to mainnet.
+Open the app, connect on chain 143, and repeat steps 3, 4, 6 and 7 with the
+matching presets. Step 5 stays cast-driven; in the UI, verify the repay cube
+with a small wallet-funded repayment against the position from step 5 instead.
+Before every send, verify that the UI says “Simulation passed”, the approval
+amount equals the exact funding requirement, and the Monadscan link points to
+mainnet.
