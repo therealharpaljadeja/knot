@@ -96,6 +96,19 @@ describe("combo encoding", () => {
     expect(decoded.args).toEqual([ADDRESSES.usdc, 1_500_000n]);
   });
 
+  it("encodes the repay cube defaults as the chained max sentinel", () => {
+    const action = aaveRepayCube.encode(aaveRepayCube.defaults, addresses);
+    const decoded = decodeFunctionData({ abi: abis.HandlerAaveV3, data: action.data });
+
+    expect(decoded.args).toEqual([ADDRESSES.usdc, maxUint256]);
+  });
+
+  it("rejects a repay cube with neither an amount nor a chained input", () => {
+    expect(() =>
+      aaveRepayCube.encode({ asset: ADDRESSES.usdc, amount: "", chained: "false" }, addresses),
+    ).toThrow("Enter a valid amount.");
+  });
+
   it("encodes a zero-premium smoke test as one outer flash-loan handler", () => {
     const combo = encodeCombo({
       amount: 1_000_000n,
