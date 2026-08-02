@@ -271,9 +271,12 @@ remain at the Executor.
 ## 5. Deleverage drill — repay debt from collateral
 
 The repay action pays variable-rate debt for the initiating wallet, so this
-drill needs a live position. Create a small one outside Knot with the same
-wallet: supply USDC collateral, then borrow USDC against it (rate mode 2 is
-variable, the only mode the Pool accepts):
+drill needs a live position. Debt and collateral are both USDC here, so the
+withdrawal already returns the asset the flash loan has to give back. A position
+collateralised in a different asset needs one more action, described at the end
+of this step. Create a small position outside Knot with the same wallet: supply
+USDC collateral, then borrow USDC against it (rate mode 2 is variable, the only
+mode the Pool accepts):
 
 ```bash
 export SUPPLY_AMOUNT=2000000
@@ -373,6 +376,16 @@ The repay cube is also available in the UI. It always funds the full repayment
 move aUSDC collateral; whatever Aave does not pull is swept back in the same
 transaction. The complete deleverage above stays a cast-level drill until the
 UI can fund aTokens.
+
+A deleverage whose collateral is not the debt asset, say WETH collateral against
+USDC debt, needs one more inner action between the withdraw and the premium
+funding: `HandlerSwap.swapExactIn` selling the withdrawn collateral back into the
+debt asset, with `minOut` from a fresh quote as in step 6. Without it the
+executor never holds the debt asset again and Aave's repayment pull reverts the
+whole transaction. That shape is not drilled here: `swapExactIn` is exact-input
+only, so the output cannot be pinned at `BORROW + PREMIUM`, and the v1 cubes are
+USDC-only with the builder quoting a chained swap only from another swap's
+output.
 
 ## 6. Two-hop swap — Uniswap V3 testing mode
 
