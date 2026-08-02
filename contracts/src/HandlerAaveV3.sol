@@ -48,6 +48,10 @@ contract HandlerAaveV3 is HandlerBase {
     ///      swept back to the sender by final post-processing. The variable debt token is
     ///      deliberately untracked: it is non-transferable and the executor can never hold a
     ///      balance of it, so tracking it would add a sweep the post-processor cannot make.
+    ///      Aave's own validation rejects a zero amount and a zero debt, so a repay with
+    ///      nothing to pay reverts the whole combo rather than leaving a partial state.
+    ///      `repayWithATokens` cannot serve this: the Pool passes the caller as its own
+    ///      `onBehalfOf`, so it only clears the executor's debt, which is always zero.
     function repay(address asset, uint256 amount) external returns (uint256 repaid) {
         uint256 resolved = _resolveAmount(asset, amount);
         _trackToken(asset);

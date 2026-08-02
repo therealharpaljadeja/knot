@@ -365,6 +365,8 @@ On Monadscan confirm, in order: flash transfer, Aave `Repay` with the wallet as
 `Withdraw`, premium funding, repayment and the final USDC sweep. If the
 remaining debt was below `$BORROW`, Aave caps the repayment and the surplus
 principal returns to the wallet in the sweep; that is expected, not a failure.
+With no variable USDC debt at all the Pool rejects the repay and the Executor
+bubbles it as `InnerActionFailed`, so the simulation fails and nothing settles.
 
 The repay cube is also available in the UI. It always funds the full repayment
 (`BORROW + PREMIUM`) from the wallet, because the v1 USDC-only interface cannot
