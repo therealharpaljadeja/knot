@@ -8,6 +8,20 @@ Knot executes user-selected actions with real assets. Small changes can
 alter the security boundary, so favor focused pull requests and explicit
 reasoning over clever abstractions.
 
+## How work lands
+
+All changes go through a pull request, and every pull request needs an approving
+review from a code owner (@therealharpaljadeja or @portdeveloper) before it can
+merge. Direct pushes to the default branch are turned off. A merge means the
+work was read and accepted, not just that it was opened.
+
+Knot is a MOST pool repo (https://most.devnads.com). Claim an issue with a
+comment before you write code and wait for a maintainer to approve the claim;
+one claimed issue per person at a time, across all pool repos. Claiming a
+second issue while you already hold one voids all of your claims, and a claim
+with no PR or progress update for 7 days gets released. If you contribute with
+an AI agent, the agent must read and follow https://most.devnads.com/agents.md.
+
 ## Before you start
 
 - Read the [architecture and security model](README.md#security-model).
