@@ -203,6 +203,140 @@ The script uses argument-free `vm.startBroadcast()`, so Foundry can also select
 a Ledger (`--ledger`) or an explicit private key (`--private-key`) without
 changing Solidity code.
 
+## Registry allowlist management
+
+`ManageRegistry.s.sol` changes exactly one Registry entry per invocation. It
+loads the Registry for the RPC chain ID from `contracts/deployments.json`,
+checks that the selected signer is the current Registry owner, and prints the
+current and intended state before doing anything else.
+
+Run commands from `contracts/`. They are read-only dry runs by default, even if
+`--broadcast` is accidentally supplied. A live change requires both
+`DRY_RUN=false` and Forge's `--broadcast` flag; setting `DRY_RUN=false` without
+`--broadcast` is rejected.
+
+Set the Registry address for the independent on-chain readbacks below:
+
+```bash
+export REGISTRY=$(jq -r --arg chain_id \
+  "$(cast chain-id --rpc-url monad)" \
+  '.[$chain_id].Registry' deployments.json)
+```
+
+### Handlers
+
+Preview a handler grant:
+
+```bash
+REGISTRY_ACTION=set-handler HANDLER="$HANDLER" ALLOWED=true \
+forge script script/ManageRegistry.s.sol:ManageRegistry \
+  --rpc-url monad \
+  --account knot-deployer
+```
+
+After reviewing the chain ID, Registry, signer, target, and state printed by the
+dry run, repeat it as a live change:
+
+```bash
+DRY_RUN=false REGISTRY_ACTION=set-handler HANDLER="$HANDLER" ALLOWED=true \
+forge script script/ManageRegistry.s.sol:ManageRegistry \
+  --rpc-url monad \
+  --account knot-deployer \
+  --broadcast \
+  --slow
+```
+
+Forge simulates the setter and its postcondition before sending the collected
+transaction. After Forge reports a confirmed transaction, independently read
+the final on-chain state:
+
+```bash
+cast call "$REGISTRY" "handlers(address)(bool)" "$HANDLER" --rpc-url monad
+```
+
+Set `ALLOWED=false` to revoke a handler. `KNOWN_CALLERS` may contain a
+comma-delimited list of caller addresses to inspect before revocation:
+
+```bash
+REGISTRY_ACTION=set-handler HANDLER="$OLD_HANDLER" ALLOWED=false \
+KNOWN_CALLERS="$AAVE_POOL,$OTHER_CALLER" \
+forge script script/ManageRegistry.s.sol:ManageRegistry \
+  --rpc-url monad \
+  --account knot-deployer
+```
+
+This check is explicitly non-exhaustive because Registry mappings cannot be
+enumerated. A warning means a supplied caller still points to the handler.
+Rotate handlers in this order:
+
+1. Enable the new handler with `set-handler`.
+2. Move every known caller to it with `set-caller`.
+3. Disable the old handler and supply all known callers in `KNOWN_CALLERS`.
+
+Disabling a handler fails closed because `Executor` rechecks the handler
+allowlist, but following this order avoids leaving stale caller bindings.
+
+### Callers
+
+The intended handler must already be allowlisted. Preview and then broadcast a
+caller binding by using the same two-step flow:
+
+```bash
+REGISTRY_ACTION=set-caller CALLER="$CALLER" CALLER_HANDLER="$HANDLER" \
+forge script script/ManageRegistry.s.sol:ManageRegistry \
+  --rpc-url monad \
+  --account knot-deployer
+
+DRY_RUN=false REGISTRY_ACTION=set-caller \
+CALLER="$CALLER" CALLER_HANDLER="$HANDLER" \
+forge script script/ManageRegistry.s.sol:ManageRegistry \
+  --rpc-url monad \
+  --account knot-deployer \
+  --broadcast \
+  --slow
+```
+
+Verify the confirmed transaction:
+
+```bash
+cast call "$REGISTRY" "callers(address)(address)" "$CALLER" --rpc-url monad
+```
+
+Unbind a caller by setting `CALLER_HANDLER` to the zero address:
+
+```bash
+export ZERO_ADDRESS=0x0000000000000000000000000000000000000000
+REGISTRY_ACTION=set-caller CALLER="$CALLER" CALLER_HANDLER="$ZERO_ADDRESS" \
+forge script script/ManageRegistry.s.sol:ManageRegistry \
+  --rpc-url monad \
+  --account knot-deployer
+```
+
+### Routers
+
+Preview a router grant, then repeat with `DRY_RUN=false` and `--broadcast` only
+after its target and calldata behavior have been reviewed:
+
+```bash
+REGISTRY_ACTION=set-router ROUTER="$ROUTER" ALLOWED=true \
+forge script script/ManageRegistry.s.sol:ManageRegistry \
+  --rpc-url monad \
+  --account knot-deployer
+```
+
+Verify a confirmed router change with:
+
+```bash
+cast call "$REGISTRY" "routers(address)(bool)" "$ROUTER" --rpc-url monad
+```
+
+Handler and router grants, and nonzero caller bindings, require bytecode at the
+relevant target addresses. Revocations and zero-address caller unbinding remain
+available if code has disappeared, which preserves incident-response access.
+Always inspect the deployed bytecode before granting trust. The management
+script reads but never writes `deployments.json`, generated web bindings, or
+other repository files.
+
 ## Web app
 
 The checked package versions were resolved from the registry at implementation
