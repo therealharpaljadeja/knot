@@ -2,6 +2,7 @@ import type { Address, Hex } from "viem";
 
 export type ContractName =
   | "Registry"
+  | "RegistryTimelock"
   | "Executor"
   | "FlashLoanHandler"
   | "HandlerAaveV3"

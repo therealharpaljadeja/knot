@@ -8,6 +8,7 @@ const contractsRoot = resolve(webRoot, "../contracts");
 const allowMissingArtifacts = process.argv.includes("--if-artifacts");
 const names = [
   "Registry",
+  "RegistryTimelock",
   "Executor",
   "FlashLoanHandler",
   "HandlerAaveV3",

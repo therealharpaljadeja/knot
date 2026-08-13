@@ -1,8 +1,8 @@
 # Monad mainnet manual verification
 
-This runbook is the contract test suite. Follow it in order, use a dedicated
-wallet, and stop on the first unexpected result. Commands assume Foundry
-(`cast`, `forge`) and `jq` are installed.
+This maintainer-operated runbook complements the local Foundry unit tests.
+Follow it in order, use a dedicated wallet, and stop on the first unexpected
+result. Commands assume Foundry (`cast`, `forge`) and `jq` are installed.
 
 All addresses below are Monad mainnet:
 
@@ -78,11 +78,12 @@ forge build
 Expected: successful compilation with no Solidity warnings. Do not proceed if
 the address-book dependency resolves to different Monad addresses.
 
-Deploy. Leave router variables unset until step 5 if the venues are not yet
-reviewed:
+Deploy. Choose a reviewed, non-zero timelock delay in seconds. Leave router
+variables unset until step 5 if the venues are not yet reviewed:
 
 ```bash
 export OWNER="$DEPLOYER"
+export TIMELOCK_DELAY=ReviewedNonZeroDelayInSeconds
 forge script script/Deploy.s.sol:Deploy \
   --rpc-url "$RPC_URL" \
   --broadcast \
@@ -94,6 +95,7 @@ The script writes `deployments.json`. Load the addresses:
 
 ```bash
 export REGISTRY=$(jq -r '."143".Registry' deployments.json)
+export REGISTRY_TIMELOCK=$(jq -r '."143".RegistryTimelock' deployments.json)
 export EXECUTOR=$(jq -r '."143".Executor' deployments.json)
 export FLASH=$(jq -r '."143".FlashLoanHandler' deployments.json)
 export AAVE=$(jq -r '."143".HandlerAaveV3' deployments.json)
@@ -101,10 +103,10 @@ export SWAP=$(jq -r '."143".HandlerSwap' deployments.json)
 export FUNDS=$(jq -r '."143".HandlerFunds' deployments.json)
 ```
 
-Check code exists at all six addresses:
+Check code exists at all seven addresses:
 
 ```bash
-for ADDRESS in "$REGISTRY" "$EXECUTOR" "$FLASH" "$AAVE" "$SWAP" "$FUNDS"; do
+for ADDRESS in "$REGISTRY" "$REGISTRY_TIMELOCK" "$EXECUTOR" "$FLASH" "$AAVE" "$SWAP" "$FUNDS"; do
   cast code "$ADDRESS" --rpc-url "$RPC_URL"
 done
 ```
@@ -122,6 +124,34 @@ cast call "$REGISTRY" "callers(address)(address)" "$POOL" --rpc-url "$RPC_URL"
 
 Expected: four `true` results; `callers(POOL)` equals `$FLASH`.
 
+Check the Registry ownership and timelock security boundary:
+
+```bash
+export ZERO_ADDRESS=0x0000000000000000000000000000000000000000
+export DEFAULT_ADMIN_ROLE=0x0000000000000000000000000000000000000000000000000000000000000000
+export PROPOSER_ROLE=$(cast keccak "PROPOSER_ROLE")
+export CANCELLER_ROLE=$(cast keccak "CANCELLER_ROLE")
+export EXECUTOR_ROLE=$(cast keccak "EXECUTOR_ROLE")
+
+cast call "$REGISTRY" "owner()(address)" --rpc-url "$RPC_URL"
+cast call "$REGISTRY_TIMELOCK" "getMinDelay()(uint256)" --rpc-url "$RPC_URL"
+cast call "$REGISTRY_TIMELOCK" "hasRole(bytes32,address)(bool)" \
+  "$DEFAULT_ADMIN_ROLE" "$REGISTRY_TIMELOCK" --rpc-url "$RPC_URL"
+cast call "$REGISTRY_TIMELOCK" "hasRole(bytes32,address)(bool)" \
+  "$DEFAULT_ADMIN_ROLE" "$OWNER" --rpc-url "$RPC_URL"
+cast call "$REGISTRY_TIMELOCK" "hasRole(bytes32,address)(bool)" \
+  "$PROPOSER_ROLE" "$OWNER" --rpc-url "$RPC_URL"
+cast call "$REGISTRY_TIMELOCK" "hasRole(bytes32,address)(bool)" \
+  "$CANCELLER_ROLE" "$OWNER" --rpc-url "$RPC_URL"
+cast call "$REGISTRY_TIMELOCK" "hasRole(bytes32,address)(bool)" \
+  "$EXECUTOR_ROLE" "$ZERO_ADDRESS" --rpc-url "$RPC_URL"
+```
+
+Expected: `Registry.owner()` equals `$REGISTRY_TIMELOCK`; the delay equals
+`$TIMELOCK_DELAY`; the timelock itself is the only default admin; `$OWNER` is
+the proposer and canceller; and the zero address has the executor role, making
+execution permissionless after the delay.
+
 Verify each contract on Monadscan. Constructor arguments must match the
 deployment transaction. The official Monad Foundry flow is:
 
@@ -130,6 +160,15 @@ forge verify-contract "$REGISTRY" src/Registry.sol:Registry \
   --chain 143 --verifier etherscan \
   --etherscan-api-key "$MONADSCAN_API_KEY" \
   --constructor-args "$(cast abi-encode 'constructor(address)' "$DEPLOYER")" --watch
+```
+
+Verify the timelock with its explicit delay and proposer:
+
+```bash
+forge verify-contract "$REGISTRY_TIMELOCK" src/RegistryTimelock.sol:RegistryTimelock \
+  --chain 143 --verifier etherscan \
+  --etherscan-api-key "$MONADSCAN_API_KEY" \
+  --constructor-args "$(cast abi-encode 'constructor(uint256,address)' "$TIMELOCK_DELAY" "$OWNER")" --watch
 ```
 
 Repeat for the other five contracts using these constructor arguments:
@@ -151,8 +190,35 @@ forge verify-contract "$FUNDS" src/HandlerFunds.sol:HandlerFunds \
 ```
 
 On Monadscan, each deployment must show verified source and the expected
-deployer. The Registry transaction list must show four `HandlerSet` events and
-one `CallerSet(POOL, FLASH)` event.
+deployer. The Registry transaction list must show four `HandlerSet` events, one
+`CallerSet(POOL, FLASH)` event, and ownership transferred from `$DEPLOYER` to
+`$REGISTRY_TIMELOCK`. The timelock deployment must show its non-zero
+`MinDelayChange` and expected role grants.
+
+### Existing Registry migration instead of fresh deployment
+
+For the existing Registry, the committed `RegistryTimelock` address is
+intentionally zero until maintainers complete the migration. Do not run the
+management script against that placeholder.
+
+Preview the migration with the current Registry owner, then broadcast only
+after reviewing every printed value:
+
+```bash
+TIMELOCK_DELAY="$TIMELOCK_DELAY" \
+forge script script/MigrateRegistryTimelock.s.sol:MigrateRegistryTimelock \
+  --rpc-url "$RPC_URL" --account "$DEPLOYER_ACCOUNT"
+
+DRY_RUN=false TIMELOCK_DELAY="$TIMELOCK_DELAY" \
+forge script script/MigrateRegistryTimelock.s.sol:MigrateRegistryTimelock \
+  --rpc-url "$RPC_URL" --account "$DEPLOYER_ACCOUNT" --broadcast --slow
+```
+
+Expected: the preview changes nothing. The live run deploys one timelock and
+transfers Registry ownership to it. Re-run every ownership, delay, role, source,
+and event check above. Only after both transactions are confirmed should a
+maintainer replace the zero address in `deployments.json` and regenerate the web
+bindings.
 
 ## 3. Smoke test — 1 USDC
 
@@ -270,19 +336,46 @@ remain at the Executor.
 ## 5. Two-hop swap — Uniswap V3 testing mode
 
 The frontend fixes swaps to Uniswap V3 `SwapRouter02` and obtains quotes from
-Uniswap `QuoterV2`. Allowlist the reviewed official router once as Registry
-owner:
+Uniswap `QuoterV2`. Queue the reviewed official router through the Registry
+timelock. Use one unique salt for this exact operation:
 
 ```bash
 export UNISWAP_ROUTER=0xfe31f71c1b106eac32f1a19239c9a9a72ddfb900
-cast send "$REGISTRY" "setRouter(address,bool)" "$UNISWAP_ROUTER" true \
+export TIMELOCK_SALT=$(cast keccak "manual-uniswap-router-v1")
+
+TIMELOCK_ACTION=queue TIMELOCK_SALT="$TIMELOCK_SALT" \
+REGISTRY_ACTION=set-router ROUTER="$UNISWAP_ROUTER" ALLOWED=true \
+forge script script/ManageRegistry.s.sol:ManageRegistry \
   --rpc-url "$RPC_URL" --account "$DEPLOYER_ACCOUNT"
+
+DRY_RUN=false TIMELOCK_ACTION=queue TIMELOCK_SALT="$TIMELOCK_SALT" \
+REGISTRY_ACTION=set-router ROUTER="$UNISWAP_ROUTER" ALLOWED=true \
+forge script script/ManageRegistry.s.sol:ManageRegistry \
+  --rpc-url "$RPC_URL" --account "$DEPLOYER_ACCOUNT" --broadcast --slow
+
+TIMELOCK_ACTION=status TIMELOCK_SALT="$TIMELOCK_SALT" \
+REGISTRY_ACTION=set-router ROUTER="$UNISWAP_ROUTER" ALLOWED=true \
+forge script script/ManageRegistry.s.sol:ManageRegistry --rpc-url "$RPC_URL"
+```
+
+Expected: the live queue emits `CallScheduled` and `CallSalt`; status is
+`waiting` and prints the same operation ID and an activation timestamp. A live
+execute before that timestamp must revert and leave the router disabled. Wait
+until status is `ready`, then execute. Because the executor role is open, the
+sender need not be the proposer:
+
+```bash
+DRY_RUN=false TIMELOCK_ACTION=execute TIMELOCK_SALT="$TIMELOCK_SALT" \
+REGISTRY_ACTION=set-router ROUTER="$UNISWAP_ROUTER" ALLOWED=true \
+forge script script/ManageRegistry.s.sol:ManageRegistry \
+  --rpc-url "$RPC_URL" --account "$DEPLOYER_ACCOUNT" --broadcast --slow
+
 cast call "$REGISTRY" "routers(address)(bool)" "$UNISWAP_ROUTER" \
   --rpc-url "$RPC_URL"
 ```
 
-Expected: the read returns `true`; Monadscan shows one `RouterSet` event with
-`allowed = true`.
+Expected: status becomes `done`, the read returns `true`, and Monadscan shows
+one `CallExecuted` plus one `RouterSet` event with `allowed = true`.
 
 In the UI:
 

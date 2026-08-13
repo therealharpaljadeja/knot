@@ -4,6 +4,7 @@ pragma solidity ^0.8.30;
 import { Script, console2 } from "forge-std/Script.sol";
 import { AaveV3Monad } from "@aave-address-book/AaveV3Monad.sol";
 import { Registry } from "../src/Registry.sol";
+import { RegistryTimelock } from "../src/RegistryTimelock.sol";
 import { Executor } from "../src/Executor.sol";
 import { FlashLoanHandler } from "../src/FlashLoanHandler.sol";
 import { HandlerAaveV3 } from "../src/HandlerAaveV3.sol";
@@ -16,6 +17,7 @@ contract Deploy is Script {
     function run() external {
         address routerA = vm.envOr("ROUTER_A", address(0));
         address routerB = vm.envOr("ROUTER_B", address(0));
+        uint256 timelockDelay = vm.envUint("TIMELOCK_DELAY");
 
         // The CLI selects the signer (keystore, hardware wallet, or private key).
         vm.startBroadcast();
@@ -23,6 +25,7 @@ contract Deploy is Script {
         address owner = vm.envOr("OWNER", deployer);
 
         Registry registry = new Registry(deployer);
+        RegistryTimelock registryTimelock = new RegistryTimelock(timelockDelay, owner);
         Executor executor = new Executor(address(registry), owner);
         FlashLoanHandler flashLoan = new FlashLoanHandler(address(registry));
         HandlerAaveV3 aave = new HandlerAaveV3();
@@ -36,11 +39,14 @@ contract Deploy is Script {
         registry.setCaller(address(AaveV3Monad.POOL), address(flashLoan));
         if (routerA != address(0)) registry.setRouter(routerA, true);
         if (routerB != address(0) && routerB != routerA) registry.setRouter(routerB, true);
-        if (owner != deployer) registry.transferOwnership(owner);
+        registry.transferOwnership(address(registryTimelock));
         vm.stopBroadcast();
+
+        require(registry.owner() == address(registryTimelock), "Registry ownership transfer failed");
 
         string memory contractsJson = "contracts";
         vm.serializeAddress(contractsJson, "Registry", address(registry));
+        vm.serializeAddress(contractsJson, "RegistryTimelock", address(registryTimelock));
         vm.serializeAddress(contractsJson, "Executor", address(executor));
         vm.serializeAddress(contractsJson, "FlashLoanHandler", address(flashLoan));
         vm.serializeAddress(contractsJson, "HandlerAaveV3", address(aave));
@@ -50,6 +56,9 @@ contract Deploy is Script {
         vm.writeJson(output, string.concat(vm.projectRoot(), "/deployments.json"));
 
         console2.log("Registry", address(registry));
+        console2.log("RegistryTimelock", address(registryTimelock));
+        console2.log("RegistryTimelock proposer/canceller", owner);
+        console2.log("RegistryTimelock minimum delay", timelockDelay);
         console2.log("Executor", address(executor));
         console2.log("FlashLoanHandler", address(flashLoan));
         console2.log("HandlerAaveV3", address(aave));

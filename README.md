@@ -25,9 +25,10 @@ knot/
 └── web/        Next.js App Router dApp and manifest-driven cube registry
 ```
 
-There are no automated Solidity tests by design. Mainnet verification is the
-manual test suite. The TypeScript encoder does have unit tests because ABI drift
-would otherwise be easy to miss.
+Focused Foundry unit tests cover contract state machines and authorization
+boundaries. The maintainer-operated mainnet runbook complements those tests.
+The TypeScript encoder also has unit tests because ABI drift would otherwise be
+easy to miss.
 
 ## Quick start
 
@@ -87,7 +88,9 @@ Final post-process:
   clear temporary approvals → sweep tracked ERC-20s and MON → assert zero balances
 ```
 
-- `Registry` owns the handler, callback-caller, and router allowlists.
+- `Registry` stores the handler, callback-caller, and router allowlists.
+- `RegistryTimelock` owns `Registry`, so every allowlist addition, removal, or
+  binding change must be announced on-chain and wait for the configured delay.
 - `Executor` is the only user entry point. It stores the original sender in a
   namespaced slot, uses that slot as its reentrancy guard, and routes registered
   callbacks through `fallback`.
@@ -155,9 +158,11 @@ catastrophic.
 allowance for the current combo only. If a transaction is abandoned after
 approval, revoke that residual allowance before doing anything else.
 
-The allowlist owner is a security boundary. Use a hardware-backed multisig for
-production ownership, review bytecode before adding a handler, and allowlist
-only routers whose calldata and recipient behavior are understood.
+The timelock proposer is a security boundary. Use a hardware-backed multisig in
+production, choose and review a non-zero delay, inspect bytecode before adding a
+handler, and allowlist only routers whose calldata and recipient behavior are
+understood. The proposer can cancel queued changes; after the delay, execution
+is permissionless so an unavailable proposer cannot block an approved change.
 
 ## Contracts: build and deploy
 
@@ -181,13 +186,16 @@ Import an encrypted keystore once:
 cast wallet import knot-deployer --interactive
 ```
 
-The deployment order and wiring are automated. `OWNER`, `ROUTER_A`, and
-`ROUTER_B` are optional. If `OWNER` is omitted, ownership stays with the
-keystore account. Omit routers until venue addresses and calldata formats have
-been reviewed.
+The deployment order and wiring are automated. `TIMELOCK_DELAY` is required and
+is expressed in seconds; select it through the project's production governance
+policy. `OWNER`, `ROUTER_A`, and `ROUTER_B` are optional. If `OWNER` is omitted,
+the keystore account becomes the Executor owner and the sole timelock
+proposer/canceller. The timelock always becomes the Registry owner. Omit routers
+until venue addresses and calldata formats have been reviewed.
 
 ```bash
 cd contracts
+export TIMELOCK_DELAY=ReviewedNonZeroDelayInSeconds
 forge script script/Deploy.s.sol:Deploy \
   --rpc-url monad \
   --account knot-deployer \
@@ -196,7 +204,8 @@ forge script script/Deploy.s.sol:Deploy \
 ```
 
 Run this yourself; the repository never broadcasts it. The script writes
-`contracts/deployments.json` keyed by chain ID and logs all six addresses.
+`contracts/deployments.json` keyed by chain ID and logs all seven addresses,
+including `RegistryTimelock`.
 Continue with [MANUAL_TESTING.md](MANUAL_TESTING.md) before using the app.
 
 The script uses argument-free `vm.startBroadcast()`, so Foundry can also select
@@ -205,40 +214,92 @@ changing Solidity code.
 
 ## Registry allowlist management
 
-`ManageRegistry.s.sol` changes exactly one Registry entry per invocation. It
-loads the Registry for the RPC chain ID from `contracts/deployments.json`,
-checks that the selected signer is the current Registry owner, and prints the
-current and intended state before doing anything else.
+`RegistryTimelock` is the Registry owner. Its sole proposer is also its
+canceller, and the executor role is open: anyone may execute a queued operation
+after its activation timestamp. Changing roles or the minimum delay requires a
+separate timelocked self-call, and the delay cannot be reduced to zero.
 
-Run commands from `contracts/`. They are read-only dry runs by default, even if
-`--broadcast` is accidentally supplied. A live change requires both
-`DRY_RUN=false` and Forge's `--broadcast` flag; setting `DRY_RUN=false` without
-`--broadcast` is rejected.
+`ManageRegistry.s.sol` handles one exact Registry change per invocation. It
+loads the Registry and timelock for the RPC chain ID from
+`contracts/deployments.json`, derives the standard OpenZeppelin operation ID,
+and exposes `queue`, `status`, `execute`, and `cancel`. The operation identity
+commits to the Registry address, zero ETH value, exact setter calldata, a zero
+predecessor, and `TIMELOCK_SALT`.
 
-Set the Registry address for the independent on-chain readbacks below:
+Run commands from `contracts/`. Dry-run is the default for state-changing
+actions, even if `--broadcast` is accidentally supplied. A live queue, execute,
+or cancellation requires both `DRY_RUN=false` and Forge's `--broadcast` flag.
+`status` is always read-only and needs no signer.
+
+### Existing Registry migration
+
+The committed Monad deployment has a zero `RegistryTimelock` placeholder until
+maintainers perform and verify the migration. Do not use `ManageRegistry.s.sol`
+while that placeholder remains.
+
+Choose a reviewed non-zero delay in seconds, then preview the migration. The
+selected signer must be the current Registry owner:
 
 ```bash
-export REGISTRY=$(jq -r --arg chain_id \
-  "$(cast chain-id --rpc-url monad)" \
-  '.[$chain_id].Registry' deployments.json)
+cd contracts
+export TIMELOCK_DELAY=ReviewedNonZeroDelayInSeconds
+TIMELOCK_DELAY="$TIMELOCK_DELAY" \
+forge script script/MigrateRegistryTimelock.s.sol:MigrateRegistryTimelock \
+  --rpc-url monad \
+  --account knot-deployer
 ```
 
-### Handlers
-
-Preview a handler grant:
+The preview deploys nothing and changes no ownership. After checking the chain
+ID, Registry, current owner, proposer/canceller, open executor policy, and delay,
+maintainers may run the live migration:
 
 ```bash
+DRY_RUN=false TIMELOCK_DELAY="$TIMELOCK_DELAY" \
+forge script script/MigrateRegistryTimelock.s.sol:MigrateRegistryTimelock \
+  --rpc-url monad \
+  --account knot-deployer \
+  --broadcast \
+  --slow
+```
+
+The script intentionally does not edit `deployments.json`. After both
+transactions are confirmed, independently verify the new timelock's source,
+roles, delay, and `Registry.owner()`. Only then replace the zero
+`RegistryTimelock` value with the confirmed address and regenerate bindings with
+`pnpm --dir web codegen` from the repository root.
+
+### Operation lifecycle
+
+Export the deployed addresses and choose a unique, reviewed non-zero salt. A
+descriptive hash makes operational records easier to audit; reuse the exact
+same salt and Registry inputs for status, execution, or cancellation.
+
+```bash
+export CHAIN_ID=$(cast chain-id --rpc-url monad)
+export REGISTRY=$(jq -r --arg chain_id "$CHAIN_ID" \
+  '.[$chain_id].Registry' deployments.json)
+export REGISTRY_TIMELOCK=$(jq -r --arg chain_id "$CHAIN_ID" \
+  '.[$chain_id].RegistryTimelock' deployments.json)
+export TIMELOCK_SALT=$(cast keccak "reviewed-registry-change-unique-id")
+```
+
+For example, preview a handler grant. The script prints the current and intended
+Registry state, exact calldata, operation ID, current operation state, and
+activation timestamp:
+
+```bash
+TIMELOCK_ACTION=queue TIMELOCK_SALT="$TIMELOCK_SALT" \
 REGISTRY_ACTION=set-handler HANDLER="$HANDLER" ALLOWED=true \
 forge script script/ManageRegistry.s.sol:ManageRegistry \
   --rpc-url monad \
   --account knot-deployer
 ```
 
-After reviewing the chain ID, Registry, signer, target, and state printed by the
-dry run, repeat it as a live change:
+Queue it only after reviewing that output:
 
 ```bash
-DRY_RUN=false REGISTRY_ACTION=set-handler HANDLER="$HANDLER" ALLOWED=true \
+DRY_RUN=false TIMELOCK_ACTION=queue TIMELOCK_SALT="$TIMELOCK_SALT" \
+REGISTRY_ACTION=set-handler HANDLER="$HANDLER" ALLOWED=true \
 forge script script/ManageRegistry.s.sol:ManageRegistry \
   --rpc-url monad \
   --account knot-deployer \
@@ -246,49 +307,36 @@ forge script script/ManageRegistry.s.sol:ManageRegistry \
   --slow
 ```
 
-Forge simulates the setter and its postcondition before sending the collected
-transaction. After Forge reports a confirmed transaction, independently read
-the final on-chain state:
+Inspect the same operation without a signer or transaction:
 
 ```bash
+TIMELOCK_ACTION=status TIMELOCK_SALT="$TIMELOCK_SALT" \
+REGISTRY_ACTION=set-handler HANDLER="$HANDLER" ALLOWED=true \
+forge script script/ManageRegistry.s.sol:ManageRegistry --rpc-url monad
+```
+
+The state is `unset`, `waiting`, `ready`, or `done`. Execution before the printed
+activation timestamp reverts on-chain. Once the state is `ready`, any account
+may execute the exact operation; the script verifies both the completed
+operation and the Registry postcondition:
+
+```bash
+DRY_RUN=false TIMELOCK_ACTION=execute TIMELOCK_SALT="$TIMELOCK_SALT" \
+REGISTRY_ACTION=set-handler HANDLER="$HANDLER" ALLOWED=true \
+forge script script/ManageRegistry.s.sol:ManageRegistry \
+  --rpc-url monad \
+  --account knot-executor \
+  --broadcast \
+  --slow
+
 cast call "$REGISTRY" "handlers(address)(bool)" "$HANDLER" --rpc-url monad
 ```
 
-Set `ALLOWED=false` to revoke a handler. `KNOWN_CALLERS` may contain a
-comma-delimited list of caller addresses to inspect before revocation:
+Before execution, the proposer/canceller can cancel with the same inputs:
 
 ```bash
-REGISTRY_ACTION=set-handler HANDLER="$OLD_HANDLER" ALLOWED=false \
-KNOWN_CALLERS="$AAVE_POOL,$OTHER_CALLER" \
-forge script script/ManageRegistry.s.sol:ManageRegistry \
-  --rpc-url monad \
-  --account knot-deployer
-```
-
-This check is explicitly non-exhaustive because Registry mappings cannot be
-enumerated. A warning means a supplied caller still points to the handler.
-Rotate handlers in this order:
-
-1. Enable the new handler with `set-handler`.
-2. Move every known caller to it with `set-caller`.
-3. Disable the old handler and supply all known callers in `KNOWN_CALLERS`.
-
-Disabling a handler fails closed because `Executor` rechecks the handler
-allowlist, but following this order avoids leaving stale caller bindings.
-
-### Callers
-
-The intended handler must already be allowlisted. Preview and then broadcast a
-caller binding by using the same two-step flow:
-
-```bash
-REGISTRY_ACTION=set-caller CALLER="$CALLER" CALLER_HANDLER="$HANDLER" \
-forge script script/ManageRegistry.s.sol:ManageRegistry \
-  --rpc-url monad \
-  --account knot-deployer
-
-DRY_RUN=false REGISTRY_ACTION=set-caller \
-CALLER="$CALLER" CALLER_HANDLER="$HANDLER" \
+DRY_RUN=false TIMELOCK_ACTION=cancel TIMELOCK_SALT="$TIMELOCK_SALT" \
+REGISTRY_ACTION=set-handler HANDLER="$HANDLER" ALLOWED=true \
 forge script script/ManageRegistry.s.sol:ManageRegistry \
   --rpc-url monad \
   --account knot-deployer \
@@ -296,46 +344,41 @@ forge script script/ManageRegistry.s.sol:ManageRegistry \
   --slow
 ```
 
-Verify the confirmed transaction:
+Each repeated logical change needs a new salt because a completed operation ID
+cannot be scheduled again. Live queue and execution also reject a change that
+already matches current Registry state.
+
+### Registry actions
+
+The same lifecycle applies to all three setters:
 
 ```bash
-cast call "$REGISTRY" "callers(address)(address)" "$CALLER" --rpc-url monad
-```
+# Handler addition or delayed removal
+REGISTRY_ACTION=set-handler HANDLER="$HANDLER" ALLOWED=true
+REGISTRY_ACTION=set-handler HANDLER="$HANDLER" ALLOWED=false
 
-Unbind a caller by setting `CALLER_HANDLER` to the zero address:
+# Caller binding or delayed unbinding
+REGISTRY_ACTION=set-caller CALLER="$CALLER" CALLER_HANDLER="$HANDLER"
+REGISTRY_ACTION=set-caller CALLER="$CALLER" \
+  CALLER_HANDLER=0x0000000000000000000000000000000000000000
 
-```bash
-export ZERO_ADDRESS=0x0000000000000000000000000000000000000000
-REGISTRY_ACTION=set-caller CALLER="$CALLER" CALLER_HANDLER="$ZERO_ADDRESS" \
-forge script script/ManageRegistry.s.sol:ManageRegistry \
-  --rpc-url monad \
-  --account knot-deployer
-```
-
-### Routers
-
-Preview a router grant, then repeat with `DRY_RUN=false` and `--broadcast` only
-after its target and calldata behavior have been reviewed:
-
-```bash
-REGISTRY_ACTION=set-router ROUTER="$ROUTER" ALLOWED=true \
-forge script script/ManageRegistry.s.sol:ManageRegistry \
-  --rpc-url monad \
-  --account knot-deployer
-```
-
-Verify a confirmed router change with:
-
-```bash
-cast call "$REGISTRY" "routers(address)(bool)" "$ROUTER" --rpc-url monad
+# Router addition or delayed removal
+REGISTRY_ACTION=set-router ROUTER="$ROUTER" ALLOWED=true
+REGISTRY_ACTION=set-router ROUTER="$ROUTER" ALLOWED=false
 ```
 
 Handler and router grants, and nonzero caller bindings, require bytecode at the
-relevant target addresses. Revocations and zero-address caller unbinding remain
-available if code has disappeared, which preserves incident-response access.
-Always inspect the deployed bytecode before granting trust. The management
-script reads but never writes `deployments.json`, generated web bindings, or
-other repository files.
+relevant addresses during queue and execution. The intended caller handler must
+already be allowlisted. Removals and zero-address caller unbinding remain
+executable if code has disappeared, but they still wait for the same timelock.
+
+For handler removal, `KNOWN_CALLERS` accepts a comma-delimited list and warns if
+any supplied caller still points to that handler. Registry mappings are not
+enumerable, so the check cannot prove that the list is complete. Safely rotate
+in three separately queued and executed stages: enable the new handler, move
+every known caller, then disable the old handler. Use a distinct salt for every
+stage. The management script reads but never writes deployment data or generated
+bindings.
 
 ## Web app
 
@@ -362,15 +405,10 @@ and slippage; the app obtains the quote and builds router calldata internally.
 For a chained second swap, it spends the first swap's guaranteed minimum output.
 Any better-than-minimum remainder is swept back to the user's wallet.
 
-The deployed Registry owner must allowlist the fixed router once:
-
-```bash
-cast send 0x5bb4FffD2DfD3a7B6323FB193542bcCbEC7BA846 \
-  "setRouter(address,bool)" \
-  0xfe31f71c1b106eac32f1a19239c9a9a72ddfb900 true \
-  --rpc-url https://rpc.monad.xyz \
-  --account knot-deployer
-```
+The fixed router must be queued and executed once through the
+[Registry operation lifecycle](#operation-lifecycle) with
+`REGISTRY_ACTION=set-router`, `ROUTER=0xfe31f71c1b106eac32f1a19239c9a9a72ddfb900`,
+and `ALLOWED=true`. A direct Registry setter call cannot bypass the timelock.
 
 The `predev` and `prebuild` hooks generate `web/src/generated/contracts.ts`
 directly from `contracts/deployments.json` and Foundry `out/` ABIs. Placeholder
