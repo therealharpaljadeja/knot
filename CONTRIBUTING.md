@@ -92,8 +92,9 @@ are absent. Do not edit `web/src/generated/contracts.ts` by hand.
 | `pnpm --dir web typecheck` | Type-check the web app |
 | `pnpm contracts:fmt` | Format Solidity |
 | `pnpm contracts:build` | Compile contracts without broadcasting |
+| `pnpm contracts:test` | Run focused local Foundry unit tests |
 | `pnpm check:web` | Test, type-check, and build the web app |
-| `pnpm check:contracts` | Check Solidity formatting and compile |
+| `pnpm check:contracts` | Check Solidity formatting, compile, and test |
 | `pnpm check` | Run the complete local validation suite |
 
 ## Project layout
@@ -131,9 +132,11 @@ pnpm --dir web codegen
 pnpm check:web
 ```
 
-There are intentionally no mock or fork Solidity tests in v1. Contract
-verification follows [MANUAL_TESTING.md](MANUAL_TESTING.md), in order, on
-mainnet with small amounts and only after maintainer review.
+Focused local Foundry unit tests are required for contract state machines,
+authorization boundaries, and other behavior that can be verified without a
+fork. Knot v1 intentionally has no contributor-operated fork or mainnet test
+suite. Maintainers perform the ordered live checks in
+[MANUAL_TESTING.md](MANUAL_TESTING.md) with small amounts after review.
 
 ## Adding or changing a cube
 
