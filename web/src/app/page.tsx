@@ -38,8 +38,10 @@ import { ADDRESSES, UNISWAP_V3_FEE } from "@/config/chain";
 import { walletConnectConfigured } from "@/config/wagmi";
 import { abis, deployments as generatedDeployments } from "@/generated/contracts";
 import { cubeManifests, cubesById } from "@/cubes";
+import { MAX_ACTIONS } from "@/lib/actions";
 import { encodeCombo } from "@/lib/encoding";
 import { explainSimulationError } from "@/lib/errors";
+import { planRepaymentFunding } from "@/lib/funding";
 import {
   encodeUniswapExactInputSingle,
   minimumOutput,
@@ -309,26 +311,18 @@ export default function BuilderPage() {
     }
   }, [actions, swapQuotes]);
 
-  const automaticFunding = useMemo(() => {
-    if (!hasSwap) return premium;
-
-    const last = actions.at(-1);
-    if (
-      last?.cubeId === "swap" &&
-      last.inputs.tokenOut?.toLowerCase() === ADDRESSES.usdc.toLowerCase()
-    ) {
-      const quote = swapQuotes[last.key];
-      if (quote?.status === "ready") {
-        const repayment = borrowAmount + premium;
-        return quote.minimumAmountOut! < repayment
-          ? repayment - quote.minimumAmountOut!
-          : 0n;
-      }
-      return premium;
-    }
-
-    return borrowAmount + premium;
-  }, [actions, borrowAmount, hasSwap, premium, swapQuotes]);
+  const fundingPlan = useMemo(
+    () =>
+      planRepaymentFunding({
+        actions,
+        borrowAmount,
+        premium,
+        swapQuotes,
+        walletBalance: walletBalanceRead.data,
+      }),
+    [actions, borrowAmount, premium, swapQuotes, walletBalanceRead.data],
+  );
+  const { automaticFunding, expectedDelta, intermediateShortfall } = fundingPlan;
 
   const combo = useMemo(() => {
     if (!encodedActions || borrowAmount <= 0n || !deployed) return null;
@@ -391,9 +385,11 @@ export default function BuilderPage() {
   const wrongChain = isConnected && chainId !== 143;
   const swapIndex = actions.findIndex((action) => action.cubeId === "swap");
   const routerNotAllowed = hasSwap && routerAllowedRead.data === false;
-  const swapQuotePending = actions.some(
-    (action) => action.cubeId === "swap" && swapQuotes[action.key]?.status === "loading",
-  );
+  const swapQuotePending = actions.some((action) => {
+    if (action.cubeId !== "swap") return false;
+    const status = swapQuotes[action.key]?.status;
+    return status !== "ready" && status !== "error";
+  });
   const swapQuoteError = actions
     .map((action, index) => ({ action, index, quote: swapQuotes[action.key] }))
     .find(({ action, quote }) => action.cubeId === "swap" && quote?.status === "error");
@@ -413,7 +409,8 @@ export default function BuilderPage() {
         !needsApproval &&
         !insufficientWalletFunds &&
         !amountOverLiquidity &&
-        !routerNotAllowed,
+        !routerNotAllowed &&
+        !intermediateShortfall,
       retry: false,
     },
   });
@@ -452,16 +449,8 @@ export default function BuilderPage() {
     Boolean(simulation.data?.request) &&
     !needsApproval &&
     !amountOverLiquidity &&
-    !routerNotAllowed;
-
-  const expectedDelta = useMemo(() => {
-    const last = actions.at(-1);
-    if (last?.cubeId === "swap" && last.inputs.tokenOut?.toLowerCase() === ADDRESSES.usdc.toLowerCase()) {
-      const quote = swapQuotes[last.key];
-      if (quote?.status === "ready") return quote.amountOut! - borrowAmount - premium;
-    }
-    return -automaticFunding;
-  }, [actions, automaticFunding, borrowAmount, premium, swapQuotes]);
+    !routerNotAllowed &&
+    !intermediateShortfall;
 
   function applyPreset(id: "smoke" | "roundtrip" | "twohop") {
     setFlowError("");
@@ -577,7 +566,7 @@ export default function BuilderPage() {
         <section className="app-shell">
           <header className="app-heading">
             <h1>Flash loan combo</h1>
-            <p>Borrow USDC, add up to two actions, and repay atomically.</p>
+            <p>Borrow USDC, add up to {MAX_ACTIONS} actions, and repay atomically.</p>
           </header>
 
           <div className="workspace">
@@ -588,7 +577,7 @@ export default function BuilderPage() {
               <button onClick={() => applyPreset("roundtrip")}>Aave round trip</button>
               <button onClick={() => applyPreset("twohop")}>Two-hop swap</button>
             </div>
-            <span className="cube-count">{actions.length} / 2 actions</span>
+            <span className="cube-count">{actions.length} / {MAX_ACTIONS} actions</span>
           </div>
 
           <div className="canvas">
@@ -631,7 +620,7 @@ export default function BuilderPage() {
               />
             ))}
 
-            {actions.length < 2 && (
+            {actions.length < MAX_ACTIONS && (
               <div className="add-wrap">
                 <button className="add-cube" onClick={() => setPickerOpen((value) => !value)}>
                   <Plus size={18} /> Add action <ChevronDown size={15} />
@@ -713,20 +702,25 @@ export default function BuilderPage() {
           <div className="divider" />
           <div className="simulation">
             <div className="simulation-title"><span>Preflight simulation</span>{simulation.isFetching && <LoaderCircle className="spin" size={16} />}</div>
-            {insufficientWalletFunds ? (
-              <div className="sim-state error">
-                <AlertTriangle size={16} />
-                Wallet needs {formatUsdc(approvalAmount - (walletBalanceRead.data ?? 0n))} more USDC
-              </div>
-            ) : needsApproval && approvalAmount > 0n ? (
-              <div className="sim-state neutral"><LockKeyhole size={16} /> Exact approval required before simulation</div>
-            ) : swapQuotePending ? (
+            {swapQuotePending ? (
               <div className="sim-state neutral"><LoaderCircle className="spin" size={16} /> Fetching Uniswap quote…</div>
             ) : swapQuoteError ? (
               <div className="sim-state error">
                 <AlertTriangle size={16} />
                 Swap {swapQuoteError.index + 1}: {swapQuoteError.quote?.message}
               </div>
+            ) : intermediateShortfall ? (
+              <div className="sim-state error">
+                <AlertTriangle size={16} />
+                Cube {intermediateShortfall.actionIndex + 1} needs {formatUsdc(intermediateShortfall.required)} {intermediateShortfall.asset}, but only {formatUsdc(intermediateShortfall.available)} is guaranteed
+              </div>
+            ) : insufficientWalletFunds ? (
+              <div className="sim-state error">
+                <AlertTriangle size={16} />
+                Wallet needs {formatUsdc(approvalAmount - (walletBalanceRead.data ?? 0n))} more USDC
+              </div>
+            ) : needsApproval && approvalAmount > 0n ? (
+              <div className="sim-state neutral"><LockKeyhole size={16} /> Exact approval required before simulation</div>
             ) : routerNotAllowed ? (
               <div className="sim-state error"><AlertTriangle size={16} /> Uniswap router is not allowlisted</div>
             ) : simulation.isSuccess ? (
@@ -755,7 +749,7 @@ export default function BuilderPage() {
             >
               {walletConnectConfigured ? "Connect wallet" : "Wallet setup required"}
             </button>
-          ) : needsApproval && approvalAmount > 0n ? (
+          ) : !swapQuotePending && !swapQuoteError && !intermediateShortfall && needsApproval && approvalAmount > 0n ? (
             <button className="primary-action" onClick={approveExact} disabled={phase !== "idle" || !deployed || wrongChain || insufficientWalletFunds}>
               {phase === "approving" ? <LoaderCircle className="spin" size={18} /> : <LockKeyhole size={18} />}
               Approve exactly {formatUsdc(approvalAmount)} USDC
