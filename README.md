@@ -7,7 +7,7 @@
 > as-is under the [MIT License](LICENSE).
 
 Knot is a deliberately small combo executor for Monad mainnet. It
-opens an Aave v3 simple flash loan, runs up to two user-selected DeFi actions,
+opens an Aave v3 simple flash loan, runs up to three user-selected DeFi actions,
 repays, and returns every touched asset to the initiating wallet in one atomic
 transaction.
 

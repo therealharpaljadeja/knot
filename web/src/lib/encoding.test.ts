@@ -5,6 +5,7 @@ import {
   keccak256,
   maxUint256,
   type Address,
+  type Hex,
 } from "viem";
 import { abis } from "@/generated/contracts";
 import { ADDRESSES } from "@/config/chain";
@@ -68,5 +69,36 @@ describe("combo encoding", () => {
 
     expect(combo.handlers).toEqual([addresses.FlashLoanHandler]);
     expect(combo.approvalAmount).toBe(1_000n);
+  });
+
+  it("preserves three user actions before the hidden repayment funding action", () => {
+    const userHandlers = [
+      addresses.HandlerSwap,
+      addresses.HandlerAaveV3,
+      addresses.HandlerSwap,
+    ];
+    const userDatas = ["0x01", "0x02", "0x03"] as Hex[];
+    const combo = encodeCombo({
+      amount: 1_000_000n,
+      fundingAmount: 500n,
+      actions: userHandlers.map((handler, index) => ({
+        handler,
+        data: userDatas[index]!,
+      })),
+      deployments: addresses,
+    });
+
+    const outer = decodeFunctionData({ abi: abis.FlashLoanHandler, data: combo.datas[0]! });
+    const [, , innerHandlers, innerDatas] = outer.args as readonly [
+      Address,
+      bigint,
+      Address[],
+      Hex[],
+    ];
+
+    expect(innerHandlers.slice(0, 3)).toEqual(userHandlers);
+    expect(innerDatas.slice(0, 3)).toEqual(userDatas);
+    expect(innerHandlers[3]).toBe(addresses.HandlerFunds);
+    expect(innerDatas).toHaveLength(4);
   });
 });
