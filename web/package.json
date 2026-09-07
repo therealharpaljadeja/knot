@@ -21,7 +21,7 @@
     "@x402/core": "2.20.0",
     "@x402/evm": "2.20.0",
     "@x402/svm": "2.20.0",
-    "@walletconnect/ethereum-provider": "2.23.10",
+    "@walletconnect/ethereum-provider": "2.24.0",
     "accounts": "0.15.5",
     "lucide-react": "1.27.0",
     "next": "16.2.12",
