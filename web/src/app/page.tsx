@@ -9,6 +9,7 @@ import {
   LoaderCircle,
   LockKeyhole,
   Plus,
+  RefreshCw,
   Trash2,
   WalletCards,
   Zap,
@@ -40,6 +41,17 @@ import { abis, deployments as generatedDeployments } from "@/generated/contracts
 import { cubeManifests, cubesById } from "@/cubes";
 import { encodeCombo } from "@/lib/encoding";
 import { explainSimulationError } from "@/lib/errors";
+import {
+  RECEIPT_CONFIRMED_LABEL,
+  RECEIPT_PENDING_LABEL,
+  RECEIPT_UNKNOWN_BODY,
+  RECEIPT_UNKNOWN_RETRY_LABEL,
+  RECEIPT_UNKNOWN_TITLE,
+  receiptExplorerUrl,
+  receiptLookupDetail,
+  receiptPhase,
+  retryReceiptLookup,
+} from "@/lib/receipt";
 import {
   encodeUniswapExactInputSingle,
   minimumOutput,
@@ -114,6 +126,8 @@ export default function BuilderPage() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [flowError, setFlowError] = useState("");
   const [phase, setPhase] = useState<"idle" | "approving" | "sending">("idle");
+  const [retryingReceipt, setRetryingReceipt] = useState(false);
+  const [failedReceiptHash, setFailedReceiptHash] = useState<string>();
   const [swapQuotes, setSwapQuotes] = useState<Record<string, SwapQuoteState>>({});
   const hasSwap = actions.some((action) => action.cubeId === "swap");
 
@@ -441,6 +455,33 @@ export default function BuilderPage() {
     return () => window.clearTimeout(resetConfirmation);
   }, [receipt.isSuccess]);
 
+  useEffect(() => {
+    if (!receipt.isError) return;
+
+    setPhase("idle");
+    if (transactionHash) setFailedReceiptHash(transactionHash);
+  }, [receipt.isError, transactionHash]);
+
+  const lookupFailed =
+    transactionHash !== undefined && failedReceiptHash === transactionHash;
+  const receiptStage = receiptPhase({
+    hash: transactionHash,
+    isSuccess: receipt.isSuccess,
+    isError: lookupFailed,
+  });
+  const receiptHref = transactionHash ? receiptExplorerUrl(transactionHash) : undefined;
+
+  async function retryStatusCheck() {
+    setRetryingReceipt(true);
+    try {
+      await retryReceiptLookup({ data: receipt.data, refetch: () => receipt.refetch() });
+    } catch {
+      setFailedReceiptHash(transactionHash);
+    } finally {
+      setRetryingReceipt(false);
+    }
+  }
+
   const simulationMessage = simulation.error
     ? explainSimulationError(
         simulation.error,
@@ -739,13 +780,40 @@ export default function BuilderPage() {
           </div>
 
           {flowError && <p className="flow-error">{flowError}</p>}
-          {receipt.isSuccess ? (
-            <a className="primary-action confirmed" href={`https://monadscan.com/tx/${transactionHash}`} target="_blank" rel="noreferrer">
-              <Check size={18} /> Confirmed on Monad <ExternalLink size={15} />
+          {receiptStage === "confirmed" ? (
+            <a className="primary-action confirmed" href={receiptHref} target="_blank" rel="noreferrer">
+              <Check size={18} aria-hidden="true" /> {RECEIPT_CONFIRMED_LABEL} <ExternalLink size={15} aria-hidden="true" />
             </a>
-          ) : transactionHash ? (
-            <a className="primary-action pending" href={`https://monadscan.com/tx/${transactionHash}`} target="_blank" rel="noreferrer">
-              <LoaderCircle className="spin" size={18} /> Pending confirmation <ExternalLink size={15} />
+          ) : receiptStage === "lookup-error" ? (
+            <div className="receipt-alert">
+              <div className="receipt-alert-status" role="status" aria-live="polite">
+                <AlertTriangle size={18} aria-hidden="true" />
+                <strong>{RECEIPT_UNKNOWN_TITLE}</strong>
+                <p>{RECEIPT_UNKNOWN_BODY}</p>
+                <p className="receipt-alert-detail">
+                  <span>RPC read</span> {receiptLookupDetail(receipt.error)}
+                </p>
+              </div>
+              <p className="receipt-alert-hash">
+                Transaction <code>{shortAddress(transactionHash)}</code>
+              </p>
+              <a className="receipt-explorer" href={receiptHref} target="_blank" rel="noreferrer">
+                View on Monadscan <ExternalLink size={14} aria-hidden="true" />
+              </a>
+              <button
+                className="primary-action receipt-retry"
+                onClick={retryStatusCheck}
+                disabled={retryingReceipt}
+              >
+                {retryingReceipt
+                  ? <LoaderCircle className="spin" size={18} aria-hidden="true" />
+                  : <RefreshCw size={18} aria-hidden="true" />}
+                {retryingReceipt ? "Checking status…" : RECEIPT_UNKNOWN_RETRY_LABEL}
+              </button>
+            </div>
+          ) : receiptStage === "pending" ? (
+            <a className="primary-action pending" href={receiptHref} target="_blank" rel="noreferrer">
+              <LoaderCircle className="spin" size={18} aria-hidden="true" /> {RECEIPT_PENDING_LABEL} <ExternalLink size={15} aria-hidden="true" />
             </a>
           ) : !isConnected ? (
             <button
